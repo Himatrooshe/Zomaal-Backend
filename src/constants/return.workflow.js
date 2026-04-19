@@ -1,0 +1,8 @@
+const RETURN_STATUSES = Object.freeze(['PENDING', 'RECEIVED', 'REFUSED', 'CANCELLED']);
+
+const VERIFICATION_STATUSES = Object.freeze(['VERIFIED', 'UNVERIFIED', 'NEEDS_REVIEW']);
+
+module.exports = {
+  RETURN_STATUSES,
+  VERIFICATION_STATUSES,
+};

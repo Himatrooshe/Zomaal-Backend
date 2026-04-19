@@ -1,0 +1,490 @@
+// Zomaal Backend - Multi-tenant SaaS Schema
+// COD + Returns + KPI + Integrations
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================
+// 1. AUTH & ACCESS CONTROL
+// ============================================
+
+model User {
+  id            String    @id @default(uuid())
+  name          String
+  email         String    @unique
+  passwordHash  String?
+  role          UserRole  @default(STAFF)
+
+  stores        StoreUser[]
+  sessions      Session[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([email])
+}
+
+model Store {
+  id          String    @id @default(uuid())
+  name        String
+  currency    String    @default("USD")
+  trialEndsAt DateTime?
+
+  users       StoreUser[]
+  sessions    Session[]
+  products    Product[]
+  orders      Order[]
+  customers   Customer[]
+  settings    StoreSetting?
+  transactions Transaction[]
+  kpiSnapshots KpiSnapshot[]
+  integrations Integration[]
+  notifications Notification[]
+  auditLogs   AuditLog[]
+  returns     Return[]
+  expenses    Expense[]
+
+  createdAt   DateTime  @default(now())
+
+  @@index([name])
+}
+
+model StoreUser {
+  id        String    @id @default(uuid())
+  userId    String
+  storeId   String
+  role      StoreRole @default(STAFF)
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store     Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, storeId])
+  @@index([storeId])
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  STAFF
+}
+
+enum StoreRole {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+// Refresh-token sessions (opaque token hashed at rest)
+model Session {
+  id               String   @id @default(uuid())
+  userId           String
+  storeId          String
+  refreshTokenHash String   @unique
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([storeId])
+  @@index([expiresAt])
+}
+
+// ============================================
+// 2. CUSTOMER MODULE (COD SYSTEM CORE)
+// ============================================
+
+model Customer {
+  id            String    @id @default(uuid())
+  storeId       String
+
+  name          String?
+  phone         String?
+  email         String?
+
+  isBlacklisted Boolean   @default(false)
+  riskLevel     Int       @default(0)
+
+  totalOrdersCount Int    @default(0)
+  returnCount      Int    @default(0)
+  cancelCount      Int    @default(0)
+  refusalCount     Int    @default(0)
+
+  orders        Order[]
+  riskMetrics   CustomerRisk?
+
+  store         Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  createdAt     DateTime  @default(now())
+
+  @@index([storeId])
+  @@index([phone])
+  @@index([email])
+}
+
+// ============================================
+// 3. PRODUCTS & INVENTORY
+// ============================================
+
+model Product {
+  id                String        @id @default(uuid())
+  storeId           String
+  title             String
+  sku               String?
+  description       String?
+
+  isActive          Boolean       @default(true)
+  isArchived        Boolean       @default(false)
+
+  stock             Int           @default(0)
+  lowStockThreshold Int           @default(5)
+
+  prices            ProductPrice[]
+  orderItems        OrderItem[]
+  returnItems       ReturnItem[]
+
+  store             Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  createdAt         DateTime      @default(now())
+
+  @@index([storeId])
+  @@index([sku])
+}
+
+model ProductPrice {
+  id        String   @id @default(uuid())
+  productId String
+  quantity  Int
+  price     Float
+
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, quantity])
+  @@index([productId])
+}
+
+// ============================================
+// 4. ORDERS (CORE SYSTEM)
+// ============================================
+
+model Order {
+  id             String      @id @default(uuid())
+  storeId        String
+  customerId     String?
+
+  externalId     String?     // Shopify / shipping ID
+  status         OrderStatus @default(PENDING)
+
+  totalAmount    Float
+  codAmount      Float?
+
+  shippingCost   Float       @default(0)
+
+  isDelivered    Boolean     @default(false)
+  isReturned     Boolean     @default(false)
+  isDuplicate    Boolean     @default(false)
+
+  store          Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer       Customer?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  items          OrderItem[]
+  returns        Return[]
+
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([storeId])
+  @@index([customerId])
+  @@index([status])
+  @@index([externalId])
+}
+
+model OrderItem {
+  id        String   @id @default(uuid())
+  orderId   String
+  productId String
+
+  quantity  Int
+  price     Float
+
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  RETURNED
+}
+
+// ============================================
+// 5. RETURNS SYSTEM (CORE FEATURE)
+// ============================================
+
+model Return {
+  id                 String             @id @default(uuid())
+  orderId            String?
+  storeId            String
+
+  status             ReturnStatus       @default(PENDING)
+  verificationStatus VerificationStatus @default(UNVERIFIED)
+
+  reason             String?
+  comment            String?
+
+  scannedAt          DateTime?
+  scanMetadata       Json?
+
+  order              Order?             @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  store              Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  items              ReturnItem[]
+
+  createdAt          DateTime           @default(now())
+
+  @@index([storeId])
+  @@index([orderId])
+  @@index([status])
+}
+
+model ReturnItem {
+  id        String   @id @default(uuid())
+  returnId  String
+  productId String
+
+  quantity  Int
+
+  return    Return   @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([returnId])
+}
+
+enum ReturnStatus {
+  PENDING
+  RECEIVED
+  REFUSED
+  CANCELLED
+}
+
+enum VerificationStatus {
+  VERIFIED
+  UNVERIFIED
+  NEEDS_REVIEW
+}
+
+// ============================================
+// 6. FINANCE SYSTEM
+// ============================================
+
+enum ExpenseType {
+  ADS
+  PURCHASE
+  SHIPPING
+  OTHER
+}
+
+model Expense {
+  id        String      @id @default(uuid())
+  storeId   String
+  type      ExpenseType
+  amount    Float
+  note      String?
+
+  store     Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime    @default(now())
+
+  @@index([storeId])
+  @@index([storeId, createdAt])
+}
+
+model Transaction {
+  id        String            @id @default(uuid())
+  storeId   String
+
+  type      TransactionType
+  amount    Float
+  reference String?
+
+  store     Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime          @default(now())
+
+  @@index([storeId])
+  @@index([type])
+}
+
+enum TransactionType {
+  COD_RECEIVED
+  REFUND
+  EXPENSE
+  AD_SPEND
+  PURCHASE
+}
+
+// ============================================
+// 7. KPI SNAPSHOT (PERFORMANCE ENGINE)
+// ============================================
+
+model KpiSnapshot {
+  id             String   @id @default(uuid())
+  storeId        String
+
+  date           DateTime
+
+  totalOrders    Int
+  delivered      Int
+  returned       Int
+
+  revenue        Float
+  profit         Float
+
+  adSpend        Float
+  shippingCost   Float
+
+  store          Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, date])
+}
+
+// ============================================
+// 8. BLACKLIST SYSTEM
+// ============================================
+
+model CustomerRisk {
+  id            String   @id @default(uuid())
+  customerId    String   @unique
+  storeId       String
+
+  returnCount   Int      @default(0)
+  cancelCount   Int      @default(0)
+
+  isBlacklisted Boolean  @default(false)
+
+  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([isBlacklisted])
+}
+
+// ============================================
+// 9. INTEGRATIONS (SHOPIFY / ADS / SHIPPING)
+// ============================================
+
+model Integration {
+  id          String            @id @default(uuid())
+  storeId     String
+
+  type        IntegrationType
+  apiKey      String?
+  accessToken String?
+
+  isActive    Boolean           @default(true)
+
+  store       Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([storeId])
+  @@index([type])
+}
+
+enum IntegrationType {
+  SHOPIFY
+  YOUCAN
+  WOOCOMMERCE
+  GOOGLE_SHEETS
+  FACEBOOK_ADS
+  GOOGLE_ADS
+  TIKTOK_ADS
+  SHIPPING_COMPANY
+}
+
+// ============================================
+// 10. NOTIFICATIONS & ALERTS
+// ============================================
+
+model Notification {
+  id        String             @id @default(uuid())
+  storeId   String
+
+  type      NotificationType
+  message   String
+
+  isRead    Boolean            @default(false)
+
+  store     Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime           @default(now())
+
+  @@index([storeId])
+  @@index([isRead])
+}
+
+enum NotificationType {
+  WARNING
+  ERROR
+  INFO
+  ALERT
+}
+
+// ============================================
+// 11. SETTINGS (VERY IMPORTANT)
+// ============================================
+
+model StoreSetting {
+  id                 String  @id @default(uuid())
+  storeId            String  @unique
+
+  returnWindowDays   Int     @default(7)
+  blacklistThreshold Int     @default(3)
+
+  duplicateOrderWindowMinutes Int @default(120)
+  delayedOrderThresholdDays   Int @default(7)
+
+  alertReturnRatePercent    Float @default(10)
+  alertCancelRatePercent    Float @default(10)
+  alertUnprocessedOrdersMin Int   @default(25)
+
+  maxAdSpend         Float?
+
+  store              Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+// ============================================
+// 12. AUDIT LOG (OPTIONAL BUT STRONG)
+// ============================================
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  storeId   String
+
+  action    String
+  entity    String
+  entityId  String?
+
+  metadata  Json?
+
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([storeId])
+  @@index([entity])
+  @@index([createdAt])
+}

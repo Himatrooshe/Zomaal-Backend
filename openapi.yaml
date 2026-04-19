@@ -1,0 +1,1744 @@
+openapi: 3.0.3
+info:
+  title: Zomaal Backend API
+  description: |
+    REST API for the Zomaal backend (MVP). Successful JSON responses use `{ "success": true, "data": ... }`.
+    Errors use `{ "success": false, "error": { "code": "...", "message": "..." } }` (in development, `stack` may be included on 500s).
+
+    **Store isolation:** Authenticated business routes use the JWT `storeId`; do not trust a client-supplied store id in the body for authorization.
+
+    **Order pricing:** Line unit prices are computed on the server from product price tiers; the client must not send per-line prices.
+
+    **Protected routes** (except auth + health): `Authorization: Bearer <accessToken>`. Store-scoped routes also rely on `storeScope` + `storeMiddleware` (JWT `storeId` must match any explicit `storeId` in path/header/query/body).
+
+    Placeholder routes: `/users`, `/integrations`, parts of `/stores`, `/transactions`, legacy `/kpi/*`.
+
+    Implemented: **orders** (customer object + warnings), **returns** (scan, manual, status), **customers** (risk + blacklisted), **dashboard/kpis**, **expenses**, **alerts**.
+  version: 1.1.0
+
+servers:
+  - url: http://localhost:5000/api
+    description: Local (default PORT from env, else 5000)
+  - url: https://{host}/api
+    description: Deployed
+    variables:
+      host:
+        default: api.example.com
+
+tags:
+  - name: Health
+  - name: Auth
+  - name: Products
+  - name: Customers
+  - name: Orders
+  - name: Stores
+  - name: Users
+  - name: Returns
+  - name: Transactions
+  - name: KPI
+  - name: Dashboard
+  - name: Expenses
+  - name: Alerts
+  - name: Integrations
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      operationId: getHealth
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /auth/signup:
+    post:
+      tags: [Auth]
+      summary: Register user and store
+      operationId: authSignup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignupRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSuccessResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                emailConflict:
+                  value:
+                    success: false
+                    error:
+                      code: EMAIL_CONFLICT
+                      message: Email already exists
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login
+      description: |
+        Without `storeId`, the API uses the first store membership (by membership id). With `storeId`, it must be a membership the user actually has (`data.store.id` or `data.memberships[].storeId` from signup/login).
+      operationId: authLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSuccessResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          description: Store access / no memberships
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate refresh token and issue new tokens
+      description: Refresh tokens are rotated; the previous session row is replaced.
+      operationId: authRefresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSuccessResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke session by refresh token
+      operationId: authLogout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      loggedOut:
+                        type: boolean
+                        example: true
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          description: Unknown or already revoked refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user and store context
+      operationId: authMe
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/AuthContextData"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /products:
+    post:
+      tags: [Products]
+      summary: Create product with unit-price tiers
+      description: |
+        Each price tier: `quantity` = minimum units for that tier; `price` = unit price when that tier applies.
+        For a line quantity, the tier with the **largest** `quantity` such that `tier.quantity <= line quantity` wins.
+      operationId: createProduct
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductSuccessResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          description: SKU conflict in store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+    get:
+      tags: [Products]
+      summary: List products (paginated)
+      operationId: listProducts
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - name: includeArchived
+          in: query
+          description: Pass `true` or `1` to include archived products.
+          schema:
+            type: string
+            enum: ["true", "false", "1", "0"]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListSuccessResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /products/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceId"
+    patch:
+      tags: [Products]
+      summary: Partial update product
+      description: Optional full replacement of `prices` when `prices` is sent (must be non-empty).
+      operationId: updateProduct
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProductRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductSuccessResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+    delete:
+      tags: [Products]
+      summary: Archive product (soft delete)
+      description: Sets `isArchived` and deactivates; does not hard-delete.
+      operationId: archiveProduct
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductSuccessResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /customers:
+    post:
+      tags: [Customers]
+      summary: Create or find customer by phone/email
+      description: At least one of `phone` or `email` is required. Returns `201` if created, `200` if existing, with `meta.wasCreated`.
+      operationId: upsertCustomer
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertCustomerRequest"
+      responses:
+        "200":
+          description: Existing customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerUpsertSuccessResponse"
+        "201":
+          description: New customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerUpsertSuccessResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+    get:
+      tags: [Customers]
+      summary: List customers
+      operationId: listCustomers
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerListSuccessResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /customers/blacklisted:
+    get:
+      tags: [Customers]
+      summary: List blacklisted customers (store)
+      operationId: listBlacklistedCustomers
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BlacklistedCustomersResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /customers/{id}/risk:
+    get:
+      tags: [Customers]
+      summary: Customer risk summary (counts, score, blacklist threshold)
+      operationId: getCustomerRisk
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerRiskResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /customers/{id}:
+    get:
+      tags: [Customers]
+      summary: Get customer by id
+      operationId: getCustomer
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerSuccessResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /orders:
+    post:
+      tags: [Orders]
+      summary: Create order
+      description: |
+        Upserts **customer** from `customer` (phone/email). Server loads products and tiers; validates stock. `totalAmount` = sum(line totals) + `shippingCost`.
+        If the customer is **blacklisted**, response includes `warnings` (e.g. high-risk message). `data.isDuplicate` flags repeat product patterns within the store’s duplicate window.
+      operationId: createOrder
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderCreateResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+    get:
+      tags: [Orders]
+      summary: List orders
+      operationId: listOrders
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/OrderStatus"
+        - name: customerId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: dateFrom
+          in: query
+          description: ISO 8601 date-time (filter `createdAt` >=)
+          schema:
+            type: string
+            format: date-time
+        - name: dateTo
+          in: query
+          description: ISO 8601 date-time (filter `createdAt` <=)
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderListSuccessResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /orders/{id}:
+    get:
+      tags: [Orders]
+      summary: Get order by id
+      operationId: getOrder
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderSuccessResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /orders/{id}/status:
+    patch:
+      tags: [Orders]
+      summary: Update order status
+      description: |
+        Forward-only transitions: `PENDING`→`CONFIRMED`|`CANCELLED`; `CONFIRMED`→`SHIPPED`; `SHIPPED`→`DELIVERED`; `DELIVERED`→`RETURNED`.
+        `CANCELLED`: restores stock, increments customer `cancelCount`. `RETURNED`: sets `isReturned`, increments customer `returnCount`.
+        Blacklist/risk flags are updated from store settings after cancel/return.
+      operationId: updateOrderStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  $ref: "#/components/schemas/OrderStatus"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderSuccessResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /stores:
+    get:
+      tags: [Stores]
+      summary: Stores root (placeholder)
+      operationId: storesRoot
+      responses:
+        "200":
+          description: Placeholder
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Stores routes - coming soon
+
+  /stores/{storeId}/settings-preview:
+    get:
+      tags: [Stores]
+      summary: Example owner/admin-only route
+      description: Requires Bearer token; user must have access to `storeId` with role OWNER or ADMIN.
+      operationId: storeSettingsPreview
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: storeId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      storeId:
+                        type: string
+                        format: uuid
+                      role:
+                        $ref: "#/components/schemas/StoreRole"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /users:
+    get:
+      tags: [Users]
+      summary: Users (placeholder)
+      operationId: usersRoot
+      responses:
+        "200":
+          description: Placeholder
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+  /returns/scan:
+    post:
+      tags: [Returns]
+      summary: Scan return (match order or create NEEDS_REVIEW)
+      description: |
+        Provide at least one of `trackingId` (matches `Order.externalId`), `orderReference` (UUID → order id, else externalId), or `phone` (latest order for customer).
+        Matched: `verificationStatus` VERIFIED, `scannedAt` set, return line items copied from order. Unmatched: `orderId` null, `NEEDS_REVIEW`, `scanMetadata`.
+      operationId: scanReturn
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReturnScanRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReturnSuccessResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /returns/manual:
+    post:
+      tags: [Returns]
+      summary: Manual return (quantities must not exceed order lines)
+      operationId: manualReturn
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReturnManualRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReturnSuccessResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /returns/{id}/status:
+    patch:
+      tags: [Returns]
+      summary: Update return status (REFUSED increments customer refusalCount)
+      operationId: updateReturnStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  $ref: "#/components/schemas/ReturnStatus"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReturnSuccessResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /dashboard/kpis:
+    get:
+      tags: [Dashboard]
+      summary: Store KPI aggregates (orders only, live DB)
+      operationId: getDashboardKpis
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardKpisResponse"
+
+  /expenses:
+    post:
+      tags: [Expenses]
+      summary: Create expense
+      operationId: createExpense
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExpenseRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExpenseSuccessResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+    get:
+      tags: [Expenses]
+      summary: List expenses (paginated)
+      operationId: listExpenses
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExpenseListResponse"
+
+  /alerts:
+    get:
+      tags: [Alerts]
+      summary: Smart alerts (return/cancel rates, backlog, blacklisted activity)
+      description: Thresholds come from `StoreSetting` (`alertReturnRatePercent`, `alertCancelRatePercent`, `alertUnprocessedOrdersMin`).
+      operationId: listAlerts
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertsListResponse"
+
+  /transactions:
+    get:
+      tags: [Transactions]
+      summary: Transactions (placeholder)
+      operationId: transactionsRoot
+      responses:
+        "200":
+          description: Placeholder
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+  /kpi/snapshot:
+    get:
+      tags: [KPI]
+      summary: KPI snapshot (placeholder)
+      operationId: kpiSnapshot
+      responses:
+        "200":
+          description: Placeholder
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+  /kpi/dashboard:
+    get:
+      tags: [KPI]
+      summary: KPI dashboard (placeholder)
+      operationId: kpiDashboard
+      responses:
+        "200":
+          description: Placeholder
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+  /integrations:
+    get:
+      tags: [Integrations]
+      summary: Integrations (placeholder)
+      operationId: integrationsRoot
+      responses:
+        "200":
+          description: Placeholder
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Access JWT payload (minimal): `userId`, `role` (store role for this token), `storeId`.
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    ErrorResponse:
+      description: Client or server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+            message:
+              type: string
+            stack:
+              type: string
+              description: Present in development for 500 errors
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+        pages:
+          type: integer
+
+    UserRole:
+      type: string
+      enum: [SUPER_ADMIN, ADMIN, STAFF]
+
+    StoreRole:
+      type: string
+      enum: [OWNER, ADMIN, STAFF]
+
+    OrderStatus:
+      type: string
+      description: Order lifecycle status; PATCH must follow allowed transitions from current status.
+      enum: [PENDING, CONFIRMED, SHIPPED, DELIVERED, CANCELLED, RETURNED]
+
+    ReturnStatus:
+      type: string
+      enum: [PENDING, RECEIVED, REFUSED, CANCELLED]
+
+    VerificationStatus:
+      type: string
+      enum: [VERIFIED, UNVERIFIED, NEEDS_REVIEW]
+
+    ExpenseType:
+      type: string
+      enum: [ADS, PURCHASE, SHIPPING, OTHER]
+
+    ProductPriceTier:
+      type: object
+      required: [quantity, price]
+      properties:
+        quantity:
+          type: integer
+          minimum: 1
+          description: Minimum units for this tier
+        price:
+          type: number
+          format: float
+          exclusiveMinimum: 0
+          description: Unit price when tier applies
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        storeId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        sku:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        isActive:
+          type: boolean
+        isArchived:
+          type: boolean
+        stock:
+          type: integer
+          minimum: 0
+        lowStockThreshold:
+          type: integer
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+        prices:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductPriceRow"
+
+    ProductPriceRow:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        productId:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+        price:
+          type: number
+          format: float
+
+    CreateProductRequest:
+      type: object
+      required: [title, prices]
+      properties:
+        title:
+          type: string
+        sku:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        stock:
+          type: integer
+          minimum: 0
+          default: 0
+        lowStockThreshold:
+          type: integer
+          minimum: 0
+          default: 5
+        prices:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ProductPriceTier"
+
+    UpdateProductRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+        sku:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        stock:
+          type: integer
+          minimum: 0
+        lowStockThreshold:
+          type: integer
+          minimum: 0
+        isActive:
+          type: boolean
+        prices:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ProductPriceTier"
+
+    Customer:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        storeId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        isBlacklisted:
+          type: boolean
+        riskLevel:
+          type: integer
+        totalOrdersCount:
+          type: integer
+        returnCount:
+          type: integer
+        cancelCount:
+          type: integer
+        refusalCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+
+    UpsertCustomerRequest:
+      type: object
+      description: At least one of phone or email required.
+      properties:
+        phone:
+          type: string
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+
+    OrderItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        orderId:
+          type: string
+          format: uuid
+        productId:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+        price:
+          type: number
+          format: float
+          description: Unit price stored for the line
+        product:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            title:
+              type: string
+            sku:
+              type: string
+              nullable: true
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        storeId:
+          type: string
+          format: uuid
+        customerId:
+          type: string
+          format: uuid
+          nullable: true
+        externalId:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        totalAmount:
+          type: number
+          format: float
+        codAmount:
+          type: number
+          format: float
+          nullable: true
+        shippingCost:
+          type: number
+          format: float
+        isDelivered:
+          type: boolean
+        isReturned:
+          type: boolean
+        isDuplicate:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        customer:
+          $ref: "#/components/schemas/CustomerSnippet"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItem"
+
+    CustomerSnippet:
+      type: object
+      nullable: true
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+
+    OrderCustomerInput:
+      type: object
+      description: At least one of `phone` or `email` required.
+      properties:
+        phone:
+          type: string
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+
+    CreateOrderRequest:
+      type: object
+      required: [customer, items]
+      properties:
+        customer:
+          $ref: "#/components/schemas/OrderCustomerInput"
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [productId, quantity]
+            properties:
+              productId:
+                type: string
+                format: uuid
+              quantity:
+                type: integer
+                minimum: 1
+        shippingCost:
+          type: number
+          format: float
+          minimum: 0
+          default: 0
+        codAmount:
+          type: number
+          format: float
+          minimum: 0
+          nullable: true
+
+    ReturnScanRequest:
+      type: object
+      description: At least one field required.
+      properties:
+        trackingId:
+          type: string
+        orderReference:
+          type: string
+        phone:
+          type: string
+
+    ReturnManualRequest:
+      type: object
+      required: [orderId, items]
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [productId, quantity]
+            properties:
+              productId:
+                type: string
+                format: uuid
+              quantity:
+                type: integer
+                minimum: 1
+        status:
+          $ref: "#/components/schemas/ReturnStatus"
+        reason:
+          type: string
+        comment:
+          type: string
+
+    Return:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        storeId:
+          type: string
+          format: uuid
+        orderId:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          $ref: "#/components/schemas/ReturnStatus"
+        verificationStatus:
+          $ref: "#/components/schemas/VerificationStatus"
+        reason:
+          type: string
+          nullable: true
+        comment:
+          type: string
+          nullable: true
+        scannedAt:
+          type: string
+          format: date-time
+          nullable: true
+        scanMetadata:
+          nullable: true
+          description: Present when scan could not match an order (opaque JSON).
+        createdAt:
+          type: string
+          format: date-time
+        order:
+          nullable: true
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            status:
+              $ref: "#/components/schemas/OrderStatus"
+            externalId:
+              type: string
+              nullable: true
+            totalAmount:
+              type: number
+              format: float
+            customerId:
+              type: string
+              format: uuid
+              nullable: true
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              returnId:
+                type: string
+                format: uuid
+              productId:
+                type: string
+                format: uuid
+              quantity:
+                type: integer
+              product:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  title:
+                    type: string
+                  sku:
+                    type: string
+                    nullable: true
+
+    CustomerRiskDetail:
+      type: object
+      properties:
+        customerId:
+          type: string
+          format: uuid
+        returnCount:
+          type: integer
+        cancelCount:
+          type: integer
+        refusalCount:
+          type: integer
+        riskScore:
+          type: integer
+          description: returnCount + cancelCount + refusalCount
+        blacklistThreshold:
+          type: integer
+        isBlacklisted:
+          type: boolean
+
+    Expense:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        storeId:
+          type: string
+          format: uuid
+        type:
+          $ref: "#/components/schemas/ExpenseType"
+        amount:
+          type: number
+          format: float
+        note:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateExpenseRequest:
+      type: object
+      required: [type, amount]
+      properties:
+        type:
+          type: string
+          description: Use lowercase in JSON — `ads`, `purchase`, `shipping`, `other` (mapped to enum server-side).
+          enum: [ads, purchase, shipping, other]
+        amount:
+          type: number
+          format: float
+          exclusiveMinimum: 0
+        note:
+          type: string
+
+    DashboardKpis:
+      type: object
+      properties:
+        totalOrders:
+          type: integer
+        deliveredOrders:
+          type: integer
+        returnedOrders:
+          type: integer
+        cancelledOrders:
+          type: integer
+        deliveryRate:
+          type: number
+          format: float
+          description: deliveredOrders / totalOrders (0 if total 0)
+        returnRate:
+          type: number
+          format: float
+          description: returnedOrders / totalOrders (0 if total 0)
+
+    AlertItem:
+      type: object
+      properties:
+        type:
+          type: string
+          description: warning or info
+          enum: [warning, info]
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    SignupRequest:
+      type: object
+      required: [name, email, password, storeName]
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+          description: Minimum length 8
+        storeName:
+          type: string
+        currency:
+          type: string
+          example: USD
+        trialDays:
+          type: number
+          default: 14
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+        storeId:
+          type: string
+          format: uuid
+          description: Optional; required when disambiguating multiple stores.
+
+    StoreSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        currency:
+          type: string
+
+    Membership:
+      type: object
+      properties:
+        storeId:
+          type: string
+          format: uuid
+        role:
+          $ref: "#/components/schemas/StoreRole"
+        store:
+          $ref: "#/components/schemas/StoreSummary"
+
+    AuthContextData:
+      type: object
+      properties:
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            email:
+              type: string
+            role:
+              $ref: "#/components/schemas/UserRole"
+        store:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            currency:
+              type: string
+            trialEndsAt:
+              type: string
+              format: date-time
+              nullable: true
+            role:
+              $ref: "#/components/schemas/StoreRole"
+        memberships:
+          type: array
+          items:
+            $ref: "#/components/schemas/Membership"
+
+    AuthPayload:
+      allOf:
+        - type: object
+          required: [accessToken, refreshToken]
+          properties:
+            accessToken:
+              type: string
+            refreshToken:
+              type: string
+        - $ref: "#/components/schemas/AuthContextData"
+
+    AuthSuccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/AuthPayload"
+
+    ProductSuccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/Product"
+
+    ProductListSuccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/Product"
+            pagination:
+              $ref: "#/components/schemas/Pagination"
+
+    CustomerSuccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/Customer"
+
+    CustomerUpsertSuccessResponse:
+      type: object
+      required: [success, data, meta]
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/Customer"
+        meta:
+          type: object
+          required: [wasCreated]
+          properties:
+            wasCreated:
+              type: boolean
+
+    CustomerListSuccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/Customer"
+            pagination:
+              $ref: "#/components/schemas/Pagination"
+
+    OrderSuccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/Order"
+
+    OrderCreateResponse:
+      type: object
+      required: [success, data, warnings]
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/Order"
+        warnings:
+          type: array
+          items:
+            type: string
+          description: e.g. high-risk customer when `isBlacklisted` was true at order time; empty array otherwise.
+
+    OrderListSuccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/Order"
+            pagination:
+              $ref: "#/components/schemas/Pagination"
+
+    CustomerRiskResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/CustomerRiskDetail"
+
+    BlacklistedCustomersResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/Customer"
+            pagination:
+              $ref: "#/components/schemas/Pagination"
+
+    ReturnSuccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/Return"
+
+    DashboardKpisResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/DashboardKpis"
+
+    ExpenseSuccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/Expense"
+
+    ExpenseListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/Expense"
+            pagination:
+              $ref: "#/components/schemas/Pagination"
+
+    AlertsListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/AlertItem"
