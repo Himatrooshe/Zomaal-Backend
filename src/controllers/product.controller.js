@@ -1,10 +1,10 @@
-const { catchAsync } = require('../../utils');
-const productService = require('./product.service');
+const { catchAsync } = require('../utils');
+const productService = require('../services/product.service');
 const {
   validateCreateProduct,
   validateUpdateProduct,
   validateListQuery,
-} = require('./product.validation');
+} = require('../validation/product.validation');
 
 exports.createProduct = catchAsync(async (req, res) => {
   const data = validateCreateProduct(req.body);
@@ -28,3 +28,4 @@ exports.archiveProduct = catchAsync(async (req, res) => {
   const product = await productService.archiveProduct(req.storeId, req.params.id);
   res.json({ success: true, data: product });
 });
+

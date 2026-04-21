@@ -1,4 +1,4 @@
-const prisma = require('../../db');
+const prisma = require('../db');
 
 async function createExpense(storeId, payload) {
   return prisma.expense.create({
@@ -34,3 +34,4 @@ module.exports = {
   createExpense,
   listExpenses,
 };
+

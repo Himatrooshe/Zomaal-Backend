@@ -1,4 +1,4 @@
-const { AppError } = require('../../utils');
+const { AppError } = require('../utils');
 
 function assertNonEmptyString(value, field) {
   if (typeof value !== 'string' || !value.trim()) {
@@ -129,3 +129,4 @@ module.exports = {
   validateUpdateProduct,
   validateListQuery,
 };
+

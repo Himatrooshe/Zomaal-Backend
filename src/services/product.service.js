@@ -1,5 +1,5 @@
-const prisma = require('../../db');
-const { AppError } = require('../../utils');
+const prisma = require('../db');
+const { AppError } = require('../utils');
 
 async function assertProductInStore(productId, storeId) {
   const product = await prisma.product.findFirst({
@@ -139,3 +139,4 @@ module.exports = {
   updateProduct,
   archiveProduct,
 };
+

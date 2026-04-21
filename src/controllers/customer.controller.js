@@ -1,6 +1,6 @@
-const { catchAsync } = require('../../utils');
-const customerService = require('./customer.service');
-const { validateUpsertCustomer, validateListQuery } = require('./customer.validation');
+const { catchAsync } = require('../utils');
+const customerService = require('../services/customer.service');
+const { validateUpsertCustomer, validateListQuery } = require('../validation/customer.validation');
 
 exports.createOrFindCustomer = catchAsync(async (req, res) => {
   const data = validateUpsertCustomer(req.body);
@@ -22,3 +22,4 @@ exports.getCustomer = catchAsync(async (req, res) => {
   const customer = await customerService.getCustomerById(req.storeId, req.params.id);
   res.json({ success: true, data: customer });
 });
+

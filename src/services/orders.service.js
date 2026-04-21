@@ -1,8 +1,8 @@
-const prisma = require('../../db');
-const { AppError } = require('../../utils');
-const { ORDER_NEXT_STATUSES } = require('../../constants/order.workflow');
-const { upsertCustomerWithClient } = require('../customer/customer.service');
-const { syncBlacklistWithClient } = require('../customers/customers.service');
+const prisma = require('../db');
+const { AppError } = require('../utils');
+const { ORDER_NEXT_STATUSES } = require('../constants/order.workflow');
+const { upsertCustomerWithClient } = require('./customer.service');
+const { syncBlacklistWithClient } = require('./customers.service');
 
 const ORDER_DETAIL_INCLUDE = {
   items: { include: { product: { select: { id: true, title: true, sku: true } } } },
@@ -324,3 +324,4 @@ module.exports = {
   updateOrderStatus,
   getDelayedOrders,
 };
+

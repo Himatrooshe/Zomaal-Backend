@@ -1,5 +1,5 @@
-const prisma = require('../../db');
-const { AppError } = require('../../utils');
+const prisma = require('../db');
+const { AppError } = require('../utils');
 
 function riskScoreFromCustomer(row) {
   return row.returnCount + row.cancelCount + row.refusalCount;
@@ -97,3 +97,4 @@ module.exports = {
   listBlacklistedCustomers,
   reconcileStoreCustomerRisk,
 };
+

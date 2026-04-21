@@ -1,5 +1,5 @@
-const prisma = require('../../db');
-const { AppError } = require('../../utils');
+const prisma = require('../db');
+const { AppError } = require('../utils');
 
 async function findExistingCustomer(client, storeId, phone, email) {
   if (phone && email) {
@@ -88,3 +88,4 @@ module.exports = {
   listCustomers,
   getCustomerById,
 };
+

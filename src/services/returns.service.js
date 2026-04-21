@@ -1,6 +1,6 @@
-const prisma = require('../../db');
-const { AppError } = require('../../utils');
-const { syncBlacklistWithClient } = require('../customers/customers.service');
+const prisma = require('../db');
+const { AppError } = require('../utils');
+const { syncBlacklistWithClient } = require('./customers.service');
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -180,7 +180,11 @@ async function createManualReturn(storeId, payload) {
         throw new AppError(`Product not on order: ${line.productId}`, 400, 'INVALID_PRODUCT');
       }
       if (line.quantity > cap) {
-        throw new AppError(`Return quantity exceeds ordered for product ${line.productId}`, 400, 'INVALID_QUANTITY');
+        throw new AppError(
+          `Return quantity exceeds ordered for product ${line.productId}`,
+          400,
+          'INVALID_QUANTITY'
+        );
       }
     }
 
@@ -210,3 +214,4 @@ module.exports = {
   createManualReturn,
   updateReturnStatus,
 };
+

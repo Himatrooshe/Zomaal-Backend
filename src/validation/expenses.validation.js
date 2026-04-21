@@ -1,4 +1,4 @@
-const { AppError } = require('../../utils');
+const { AppError } = require('../utils');
 
 const EXPENSE_TYPE_MAP = Object.freeze({
   ads: 'ADS',
@@ -25,8 +25,7 @@ function validateCreateExpense(body) {
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new AppError('amount must be a positive number', 400, 'VALIDATION_ERROR');
   }
-  const note =
-    typeof body.note === 'string' && body.note.trim() ? body.note.trim() : null;
+  const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : null;
 
   return { type, amount, note };
 }
@@ -41,3 +40,4 @@ module.exports = {
   validateCreateExpense,
   validateListQuery,
 };
+

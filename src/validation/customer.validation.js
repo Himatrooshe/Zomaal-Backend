@@ -1,4 +1,4 @@
-const { AppError } = require('../../utils');
+const { AppError } = require('../utils');
 
 function normalizeEmail(email) {
   if (email === undefined || email === null) return null;
@@ -17,8 +17,7 @@ function normalizePhone(phone) {
 function validateUpsertCustomer(body) {
   const phone = normalizePhone(body.phone);
   const email = normalizeEmail(body.email);
-  const name =
-    typeof body.name === 'string' && body.name.trim() ? body.name.trim() : null;
+  const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : null;
 
   if (!phone && !email) {
     throw new AppError('Either phone or email is required', 400, 'VALIDATION_ERROR');
@@ -39,3 +38,4 @@ module.exports = {
   normalizeEmail,
   normalizePhone,
 };
+

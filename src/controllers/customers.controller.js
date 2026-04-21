@@ -1,5 +1,5 @@
-const { catchAsync } = require('../../utils');
-const customersService = require('./customers.service');
+const { catchAsync } = require('../utils');
+const customersService = require('../services/customers.service');
 
 function parseListQuery(query) {
   const page = Math.max(1, parseInt(query.page, 10) || 1);
@@ -17,3 +17,4 @@ exports.listBlacklisted = catchAsync(async (req, res) => {
   const result = await customersService.listBlacklistedCustomers(req.storeId, query);
   res.json({ success: true, data: result });
 });
+

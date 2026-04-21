@@ -1,10 +1,10 @@
-const { catchAsync } = require('../../utils');
-const returnsService = require('./returns.service');
+const { catchAsync } = require('../utils');
+const returnsService = require('../services/returns.service');
 const {
   validateScanReturn,
   validateManualReturn,
   validateReturnStatus,
-} = require('./returns.validation');
+} = require('../validation/returns.validation');
 
 exports.scanReturn = catchAsync(async (req, res) => {
   const input = validateScanReturn(req.body);
@@ -23,3 +23,4 @@ exports.updateReturnStatus = catchAsync(async (req, res) => {
   const data = await returnsService.updateReturnStatus(req.storeId, req.params.id, status);
   res.json({ success: true, data });
 });
+

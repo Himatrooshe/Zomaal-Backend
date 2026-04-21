@@ -1,6 +1,6 @@
-const { catchAsync } = require('../../utils');
-const expensesService = require('./expenses.service');
-const { validateCreateExpense, validateListQuery } = require('./expenses.validation');
+const { catchAsync } = require('../utils');
+const expensesService = require('../services/expenses.service');
+const { validateCreateExpense, validateListQuery } = require('../validation/expenses.validation');
 
 exports.createExpense = catchAsync(async (req, res) => {
   const payload = validateCreateExpense(req.body);
@@ -13,3 +13,4 @@ exports.listExpenses = catchAsync(async (req, res) => {
   const result = await expensesService.listExpenses(req.storeId, query);
   res.json({ success: true, data: result });
 });
+

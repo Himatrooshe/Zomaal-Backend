@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { authMiddleware, storeScopeMiddleware, storeMiddleware } = require('../middleware');
-const customerController = require('../modules/customer/customer.controller');
-const customersController = require('../modules/customers/customers.controller');
+const customerController = require('../controllers/customer.controller');
+const customersController = require('../controllers/customers.controller');
 
 router.use(authMiddleware, storeScopeMiddleware, storeMiddleware);
 

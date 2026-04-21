@@ -1,6 +1,6 @@
-const { AppError } = require('../../utils');
-const { ORDER_STATUSES } = require('../../constants/order.workflow');
-const { normalizeEmail, normalizePhone } = require('../customer/customer.validation');
+const { AppError } = require('../utils');
+const { ORDER_STATUSES } = require('../constants/order.workflow');
+const { normalizeEmail, normalizePhone } = require('./customer.validation');
 
 const ORDER_STATUS_SET = new Set(ORDER_STATUSES);
 
@@ -118,7 +118,11 @@ function validateListQuery(query) {
 
 function validateStatusUpdate(body) {
   if (typeof body.status !== 'string' || !ORDER_STATUS_SET.has(body.status)) {
-    throw new AppError(`status must be one of: ${ORDER_STATUSES.join(', ')}`, 400, 'VALIDATION_ERROR');
+    throw new AppError(
+      `status must be one of: ${ORDER_STATUSES.join(', ')}`,
+      400,
+      'VALIDATION_ERROR'
+    );
   }
   return body.status;
 }
@@ -128,3 +132,4 @@ module.exports = {
   validateListQuery,
   validateStatusUpdate,
 };
+

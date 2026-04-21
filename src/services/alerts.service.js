@@ -1,5 +1,5 @@
-const prisma = require('../../db');
-const dashboardService = require('../dashboard/dashboard.service');
+const prisma = require('../db');
+const dashboardService = require('./dashboard.service');
 
 async function getAlerts(storeId) {
   const settings = await prisma.storeSetting.findUnique({ where: { storeId } });
@@ -69,3 +69,4 @@ async function getAlerts(storeId) {
 module.exports = {
   getAlerts,
 };
+

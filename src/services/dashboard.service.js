@@ -1,4 +1,4 @@
-const prisma = require('../../db');
+const prisma = require('../db');
 
 async function getKpiCounts(storeId) {
   const where = { storeId };
@@ -35,3 +35,4 @@ module.exports = {
   getKpiCounts,
   getDashboardKpis,
 };
+

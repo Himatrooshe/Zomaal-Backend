@@ -7,7 +7,7 @@ const {
   refresh,
   logout,
   getMe,
-} = require('../modules/auth/auth.controller');
+} = require('../controllers/auth.controller');
 
 router.post('/signup', signup);
 router.post('/login', login);

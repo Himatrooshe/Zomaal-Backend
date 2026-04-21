@@ -1,10 +1,10 @@
-const { catchAsync } = require('../../utils');
-const ordersService = require('./orders.service');
+const { catchAsync } = require('../utils');
+const ordersService = require('../services/orders.service');
 const {
   validateCreateOrder,
   validateListQuery,
   validateStatusUpdate,
-} = require('./orders.validation');
+} = require('../validation/orders.validation');
 
 exports.createOrder = catchAsync(async (req, res) => {
   const payload = validateCreateOrder(req.body);
@@ -28,3 +28,4 @@ exports.updateOrderStatus = catchAsync(async (req, res) => {
   const order = await ordersService.updateOrderStatus(req.storeId, req.params.id, status);
   res.json({ success: true, data: order });
 });
+

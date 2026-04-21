@@ -1,6 +1,6 @@
-const { AppError } = require('../../utils');
-const { RETURN_STATUSES } = require('../../constants/return.workflow');
-const { normalizePhone } = require('../customer/customer.validation');
+const { AppError } = require('../utils');
+const { RETURN_STATUSES } = require('../constants/return.workflow');
+const { normalizePhone } = require('./customer.validation');
 
 const RETURN_STATUS_SET = new Set(RETURN_STATUSES);
 
@@ -51,13 +51,16 @@ function validateManualReturn(body) {
   if (body.status !== undefined && body.status !== null && body.status !== '') {
     const s = String(body.status).trim();
     if (!RETURN_STATUS_SET.has(s)) {
-      throw new AppError(`status must be one of: ${RETURN_STATUSES.join(', ')}`, 400, 'VALIDATION_ERROR');
+      throw new AppError(
+        `status must be one of: ${RETURN_STATUSES.join(', ')}`,
+        400,
+        'VALIDATION_ERROR'
+      );
     }
     status = s;
   }
 
-  const reason =
-    typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : null;
+  const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : null;
   const comment =
     typeof body.comment === 'string' && body.comment.trim() ? body.comment.trim() : null;
 
@@ -72,7 +75,11 @@ function validateManualReturn(body) {
 
 function validateReturnStatus(body) {
   if (typeof body.status !== 'string' || !RETURN_STATUS_SET.has(body.status.trim())) {
-    throw new AppError(`status must be one of: ${RETURN_STATUSES.join(', ')}`, 400, 'VALIDATION_ERROR');
+    throw new AppError(
+      `status must be one of: ${RETURN_STATUSES.join(', ')}`,
+      400,
+      'VALIDATION_ERROR'
+    );
   }
   return body.status.trim();
 }
@@ -82,3 +89,4 @@ module.exports = {
   validateManualReturn,
   validateReturnStatus,
 };
+

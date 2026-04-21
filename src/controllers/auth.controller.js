@@ -1,5 +1,5 @@
-const authService = require('../../services/auth.service');
-const { AppError, catchAsync } = require('../../utils');
+const authService = require('../services/auth.service');
+const { AppError, catchAsync } = require('../utils');
 
 exports.signup = catchAsync(async (req, res, next) => {
   const { name, email, password, storeName, currency, trialDays } = req.body;
@@ -42,3 +42,4 @@ exports.getMe = catchAsync(async (req, res, next) => {
   });
   res.json({ success: true, data });
 });
+

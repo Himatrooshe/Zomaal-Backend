@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authMiddleware, storeScopeMiddleware, storeMiddleware } = require('../middleware');
-const dashboardController = require('../modules/dashboard/dashboard.controller');
+const dashboardController = require('../controllers/dashboard.controller');
 
 router.use(authMiddleware, storeScopeMiddleware, storeMiddleware);
 
